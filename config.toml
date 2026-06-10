@@ -1,0 +1,92 @@
+[plugin]
+enabled = true
+bot_name = "麦麦"
+config_version = "1.1.1"
+
+[score]
+min_score = -100
+max_score = 100
+default_score = 0
+max_delta_per_eval = 8
+positive_delta_multiplier = 1.5
+negative_delta_multiplier = 1.5
+ignore_abuse_negative_min_score = 80
+
+[inactivity_decay]
+enabled = true
+grace_days = 7
+interval_days = 7
+delta_per_interval = 10
+max_delta_once = 10
+min_score = 0
+
+[evaluation]
+enabled = true
+messages_per_eval = 3
+cooldown_seconds = 300
+recent_limit = 20
+model = "utils"
+temperature = 0.2
+max_tokens = 300
+min_confidence = 0.45
+
+[feedback]
+enabled = true
+min_abs_delta_to_notify = 2
+show_delta_value = true
+positive_template = "{bot_name}对你的好感度上升了{delta_text}。"
+negative_template = "{bot_name}对你的好感度下降了{delta_text}。"
+
+[progression]
+liked_unlock_min_confidence = 0.65
+lover_unlock_min_confidence = 0.8
+lover_min_positive_eval_count = 10
+lover_growth_slowdown = true
+
+[injection]
+enabled = true
+hide_score_from_reply = true
+inject_when_uncertain = false
+max_prompt_length = 1000
+lover_style_in_group = false
+group_lover_display_level = "亲近的人"
+private_lover_names = [
+    "亲爱的",
+    "笨蛋",
+]
+
+[privacy]
+allow_user_query_self = true
+allow_user_query_others = false
+allow_admin_query_others = true
+store_reasons = true
+max_reason_records = 20
+
+[admin]
+admin_user_ids = []
+allow_manual_adjust = true
+allow_reset = true
+
+[debug]
+enabled = false
+log_level = "debug"
+include_message_preview = false
+
+[spicy_image]
+enabled = true
+immich_base_url = ""
+immich_api_key = ""
+normal_album = "正常"
+negative_album = "屎"
+low_album = "涩涩-低"
+medium_album = "涩涩-中"
+high_album = "涩涩-高"
+cooldown_seconds = 10
+preference_timeout_seconds = 60
+recall_after_seconds = 60
+request_model = "utils"
+request_temperature = 0.2
+request_max_tokens = 500
+tag_match_threshold = 0.45
+random_search_size = 50
+max_send_attempts = 3
