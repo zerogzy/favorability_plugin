@@ -207,3 +207,5 @@ class FavorabilityPlugin(MaiBotPlugin):
 def create_plugin() -> FavorabilityPlugin:
     """MaiBot SDK 入口：创建好感度插件实例"""
     return FavorabilityPlugin()
+
+"""我不知道为啥会报错"""
