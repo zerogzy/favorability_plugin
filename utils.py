@@ -1,3 +1,10 @@
+"""
+好感度插件 - 工具函数
+
+提供各模块共用的纯函数，包括文本处理、JSON 提取、
+风险归一化、数值钳制等。不依赖插件实例状态。
+"""
+
 from __future__ import annotations
 
 import json

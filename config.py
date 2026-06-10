@@ -1,3 +1,10 @@
+"""
+好感度插件 - 配置类定义
+
+使用 MaiBot SDK 的 PluginConfigBase 体系，将所有可配置项按功能分区组织。
+每个 Section 对应管理面板中的一个 UI 分组。
+"""
+
 from __future__ import annotations
 
 from maibot_sdk import Field, PluginConfigBase
