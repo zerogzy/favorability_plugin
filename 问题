@@ -1,0 +1,27 @@
+(a) 没有拉取系统提示词
+_build_eval_prompt 方法（evaluation.py:227-277）构建评分 prompt 时，内容完全是本地硬编码的模板：
+def _build_eval_prompt(self, user_id, current_score, user, messages):
+    # 以下全部是本地拼接，没有任何 "拉取系统提示词" 的操作
+    return f"""你是 MaiBot 好感度评分器。请评估指定用户最近发言对{bot_name}好感度的影响。
+
+评分对象 QQ：{user_id}
+当前好感度：{current_score}/100
+当前关系等级：{current_level}
+
+最近发言：
+{joined}
+...
+"""
+没有调用任何 API 去获取机器人的系统提示词（人设、性格描述等），评分 LLM 完全不知道机器人的 人设 是啥，只看到一条固定的评分规则模板。
+(b) 没有拉取最近 3 条聊天记录
+messages 参数的来源是 _pending_messages 字典，这个字典的内容仅仅来自 observe_message Hook 传入的 text 字段：
+# evaluation.py - accumulate_and_maybe_eval
+bucket = self._pending_messages.setdefault(user_id, [])
+bucket.append(text)  # text 是 Hook 传入的原始用户消息文本
+也就是说，它只累积了用户自己发的消息的纯文本，并没有：
+调用 ctx.message.get_recent() 拉取聊天历史
+拉取机器人的回复消息
+拉取包含上下文的完整对话记录
+唯一用到 get_recent 的地方是 injection.py:132，但那只是为了确定回复目标用户是谁，跟评分无关：
+# injection.py - 只用于找目标 user_id，不用于评分
+recent = await self._plugin.ctx.message.get_recent(session_id, limit=10)
