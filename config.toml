@@ -1,7 +1,7 @@
 [plugin]
 enabled = true
 bot_name = "麦麦"
-config_version = "1.1.1"
+config_version = "2.0.0"
 
 [score]
 min_score = -100
@@ -11,6 +11,7 @@ max_delta_per_eval = 8
 positive_delta_multiplier = 1.5
 negative_delta_multiplier = 1.5
 ignore_abuse_negative_min_score = 80
+first_impression_eval_threshold = 5
 
 [inactivity_decay]
 enabled = true
@@ -42,6 +43,7 @@ liked_unlock_min_confidence = 0.65
 lover_unlock_min_confidence = 0.8
 lover_min_positive_eval_count = 10
 lover_growth_slowdown = true
+demotion_buffer_enabled = true
 
 [injection]
 enabled = true
@@ -50,10 +52,9 @@ inject_when_uncertain = false
 max_prompt_length = 1000
 lover_style_in_group = false
 group_lover_display_level = "亲近的人"
-private_lover_names = [
-    "亲爱的",
-    "笨蛋",
-]
+private_lover_names = ["亲爱的", "笨蛋"]
+show_progress_hint = true
+show_buffer_hint = true
 
 [privacy]
 allow_user_query_self = true
