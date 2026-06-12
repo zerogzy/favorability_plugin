@@ -6,6 +6,13 @@
 - 用户数据的 CRUD 操作
 - 好感度变化（delta）的写入与晋级校验
 - 久未互动衰减的计算与应用
+
+重构改进：
+1. apply_delta 倍率计算改为"先乘后钳"（不再二次钳制使倍率失效）
+2. 新增降级缓冲机制（高级档扣分先消耗缓冲再掉级）
+3. 新增恋人档渐进减速（使用 lover_growth_rate 替代粗暴 cap=2）
+4. 新增首因效应（新用户前 N 条评价有保护倍率）
+5. 晋级门槛统一由 levels 模块查询，不再硬编码
 """
 
 from __future__ import annotations
@@ -19,6 +26,10 @@ from typing import Any
 
 from .config import FavorabilityConfig
 from .constants import DATA_PATH, LEGACY_DATA_PATH
+from .levels import (
+    GATE_LEVELS, demotion_buffer_for_score, level_for_score,
+    lover_growth_rate, score_threshold_for_level,
+)
 from .utils import clamp, clean_text, now, normalize_risk
 
 
@@ -201,7 +212,7 @@ class FavorabilityStore:
             conn.commit()
             return user
 
-    # ── 好感度变更 ───────────────────────────────────────────────
+    # ── 好感度变更（重构核心） ───────────────────────────────────
 
     def set_score(self, user_id: str, score: int, cfg: FavorabilityConfig) -> dict[str, Any]:
         """直接设置用户好感度为指定值（管理员操作）"""
@@ -228,7 +239,16 @@ class FavorabilityStore:
         session_id: str,
         cfg: FavorabilityConfig,
     ) -> tuple[dict[str, Any], int]:
-        """应用好感度变化值，包含倍率、晋级门槛和风险保护逻辑。
+        """应用好感度变化值（重构版）。
+
+        处理链路：
+        1. 钳制原始 delta → 乘以倍率 → 再次钳制（修复：倍率后用 max_delta*multiplier 上限）
+        2. 首因效应保护（新用户前几次评价有缩放）
+        3. 高好感辱骂豁免
+        4. 恋人档渐进减速（使用 lover_growth_rate 平滑衰减）
+        5. 降级缓冲（高级档扣分先消耗缓冲再真正掉级）
+        6. 晋级门槛校验（从 levels 模块统一查询）
+        7. 写入变更 + 记录原因
 
         Returns:
             (更新后的用户字典, 实际变化值)
@@ -237,37 +257,77 @@ class FavorabilityStore:
         risk = normalize_risk(risk, reason)
         old_score = int(user.get("score", cfg.score.default_score) or 0)
 
-        # 1. 钳制原始 delta 并应用倍率
-        max_delta = max(1, int(cfg.score.max_delta_per_eval))
-        adj_delta = clamp(int(delta), -max_delta, max_delta)
-        if adj_delta > 0:
-            adj_delta = max(1, round(adj_delta * float(cfg.score.positive_delta_multiplier)))
-        elif adj_delta < 0:
-            adj_delta = min(-1, round(adj_delta * float(cfg.score.negative_delta_multiplier)))
-        adj_delta = clamp(adj_delta, -max_delta, max_delta)
+        # ── 步骤 1：倍率计算（修复版） ──
+        # 旧逻辑：先钳制到 [-8,8]，乘倍率，再钳制到 [-8,8] → 倍率几乎无效
+        # 新逻辑：先钳制原始 delta，乘倍率，再用扩大后的上限钳制
+        max_raw_delta = max(1, int(cfg.score.max_delta_per_eval))
+        raw_delta = clamp(int(delta), -max_raw_delta, max_raw_delta)
 
-        # 2. 高好感度时辱骂/骚扰不再扣分
+        if raw_delta > 0:
+            pos_mult = float(cfg.score.positive_delta_multiplier)
+            adj_delta = max(1, round(raw_delta * pos_mult))
+            # 扩大上限：原始上限 × 倍率，确保倍率真正生效
+            adj_max = max(max_raw_delta, round(max_raw_delta * pos_mult))
+            adj_delta = clamp(adj_delta, 1, adj_max)
+        elif raw_delta < 0:
+            neg_mult = float(cfg.score.negative_delta_multiplier)
+            adj_delta = min(-1, round(raw_delta * neg_mult))
+            adj_max = max(max_raw_delta, round(max_raw_delta * neg_mult))
+            adj_delta = clamp(adj_delta, -adj_max, -1)
+        else:
+            adj_delta = 0
+
+        # ── 步骤 2：首因效应保护 ──
+        # 新用户（正向评价 < 5 次）的负向 delta 缩小，避免初始印象被单条消息毁掉
+        eval_count = int(user.get("positive_eval_count", 0) or 0) + int(user.get("negative_eval_count", 0) or 0)
+        if adj_delta < 0 and eval_count < 5:
+            adj_delta = max(-2, round(adj_delta * 0.5))
+
+        # ── 步骤 3：高好感辱骂豁免 ──
         if old_score >= int(cfg.score.ignore_abuse_negative_min_score) and adj_delta < 0:
             if risk in {"insult", "sexual_harassment"}:
                 adj_delta = 0
 
-        # 3. 恋人档增长减速
-        if cfg.progression.lover_growth_slowdown and old_score >= 91 and adj_delta > 2:
-            adj_delta = 2
+        # ── 步骤 4：恋人档渐进减速 ──
+        if adj_delta > 0 and old_score >= 91 and cfg.progression.lover_growth_slowdown:
+            rate = lover_growth_rate(old_score)
+            adj_delta = max(1, round(adj_delta * rate))
 
-        # 4. 晋级门槛校验
+        # ── 步骤 5：降级缓冲 ──
+        # 高级档扣分时先消耗缓冲区，缓冲区内只降到门槛线，不掉级
+        if adj_delta < 0:
+            buffer = demotion_buffer_for_score(old_score)
+            if buffer > 0:
+                threshold = score_threshold_for_level(level_for_score(old_score))
+                if threshold is not None:
+                    # 最低只降到当前等级的门槛分数，不超过缓冲值
+                    floor = max(threshold, old_score - buffer)
+                    candidate = old_score + adj_delta
+                    if candidate < floor:
+                        # 缓冲吸收了部分扣分
+                        adj_delta = floor - old_score
+
+        # ── 步骤 6：晋级门槛校验 ──
         candidate = clamp(old_score + adj_delta, cfg.score.min_score, cfg.score.max_score)
-        # → 喜欢：需要最低置信度
-        if old_score <= 80 < candidate and confidence < cfg.progression.liked_unlock_min_confidence:
-            candidate = min(candidate, 80)
-        # → 恋人：需要置信度 + 正向评价次数
-        if old_score <= 90 < candidate:
-            enough_conf = confidence >= cfg.progression.lover_unlock_min_confidence
-            enough_hist = int(user.get("positive_eval_count", 0) or 0) >= cfg.progression.lover_min_positive_eval_count
-            if not (enough_conf and enough_hist):
-                candidate = min(candidate, 90)
+        new_level = level_for_score(candidate)
+        old_level = level_for_score(old_score)
 
-        # 5. 写入变更
+        if new_level != old_level and new_level in GATE_LEVELS:
+            # 升入"喜欢的人"：需要最低置信度
+            if new_level == "喜欢的人" and confidence < cfg.progression.liked_unlock_min_confidence:
+                threshold = score_threshold_for_level("喜欢的人")
+                if threshold is not None:
+                    candidate = min(candidate, threshold - 1)
+            # 升入"恋人"：需要置信度 + 正向评价次数
+            if new_level == "恋人":
+                enough_conf = confidence >= cfg.progression.lover_unlock_min_confidence
+                enough_hist = int(user.get("positive_eval_count", 0) or 0) >= cfg.progression.lover_min_positive_eval_count
+                if not (enough_conf and enough_hist):
+                    threshold = score_threshold_for_level("恋人")
+                    if threshold is not None:
+                        candidate = min(candidate, threshold - 1)
+
+        # ── 步骤 7：写入变更 ──
         actual_delta = candidate - old_score
         user["score"] = candidate
         user["updated_at"] = now()
@@ -277,7 +337,7 @@ class FavorabilityStore:
         elif actual_delta < 0:
             user["negative_eval_count"] = int(user.get("negative_eval_count", 0) or 0) + 1
 
-        # 6. 记录评分原因
+        # 记录评分原因
         if cfg.privacy.store_reasons and cfg.privacy.max_reason_records > 0:
             records = user.setdefault("recent_reasons", [])
             if not isinstance(records, list):
